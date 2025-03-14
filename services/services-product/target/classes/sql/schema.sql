@@ -1,0 +1,7 @@
+-- 商品表
+CREATE TABLE product (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '商品ID',
+ product_name VARCHAR(255) NOT NULL COMMENT '商品名称',
+ price DECIMAL(10,2) NOT NULL COMMENT '商品价格，保留两位小数',
+ num INT NOT NULL COMMENT '库存数量'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='商品表';

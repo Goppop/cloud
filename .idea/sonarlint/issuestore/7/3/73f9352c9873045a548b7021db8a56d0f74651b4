@@ -1,0 +1,8 @@
+
+{
+java:S2142"^Either re-interrupt this method or rethrow the "InterruptedException" that can be caught here.(ä ¹€8à¥ÓÔÖ2
+Z	java:S106"9Replace this use of System.out or System.err by a logger.(”…´Äşÿÿÿÿ8â¥ÓÔÖ2
+X
+java:S2274";Remove this call to "await" or move it into a "while" loop.(­ÊÇ8æ¥ÓÔÖ2
+U	java:S106"9Replace this use of System.out or System.err by a logger.(‘«²Ç8ç¥ÓÔÖ2
+U	java:S106"9Replace this use of System.out or System.err by a logger.(Åºı„8é¥ÓÔÖ2

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <option name="BUILD_PROCESS_HEAP_SIZE" value="2048" />
+    <annotationProcessing>
+      <profile default="true" name="Default" enabled="true" />
+      <profile name="Maven default annotation processors profile" enabled="true">
+        <sourceOutputDir name="target/generated-sources/annotations" />
+        <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
+        <outputRelativeToContentRoot value="true" />
+        <module name="services-product" />
+        <module name="services-order" />
+        <module name="model" />
+        <module name="point-mall-service" />
+        <module name="demo" />
+      </profile>
+    </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="jd-integration-service" target="17" />
+    </bytecodeTargetLevel>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="cloud-demo" options="-parameters" />
+      <module name="demo" options="-parameters" />
+      <module name="jd-integration-service" options="-parameters" />
+      <module name="model" options="-parameters" />
+      <module name="point-mall-service" options="-parameters" />
+      <module name="services" options="-parameters" />
+      <module name="services-order" options="-parameters" />
+      <module name="services-product" options="-parameters" />
+    </option>
+  </component>
+</project>

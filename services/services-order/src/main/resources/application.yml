@@ -1,0 +1,44 @@
+server:
+  port: 8000
+spring:
+  profiles:
+    active: dev
+  application:
+    name: service-order
+  cloud:
+    nacos:
+      server-addr: 127.0.0.1:8848
+      config:
+        import-check:
+          enabled: false
+        namespace: ${spring.profiles.active:dev}
+  datasource:
+    url: ${order.db-url}
+    username: ${order.db-username}
+    password: ${order.db-password}
+    driver-class-name: ${order.db-driver-class-name}
+---
+spring:
+  config:
+    import:
+      - nacos:common.properties?group=service-order
+      - nacos:database.properties?group=service-order
+      - nacos:redis.properties?group=service-order
+    activate:
+      on-profile: dev
+---
+spring:
+  config:
+    import:
+      - nacos:common.properties?group=service-order
+      - nacos:database.properties?group=service-order
+    activate:
+      on-profile: test
+---
+spring:
+  config:
+    import:
+      - nacos:common.properties?group=service-order
+      - nacos:database.properties?group=service-order
+    activate:
+      on-profile: prod
