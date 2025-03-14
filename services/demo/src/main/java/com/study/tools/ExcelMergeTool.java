@@ -16,9 +16,11 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
 /**
  * Excel合并工具 - 高性能实现
@@ -496,6 +498,291 @@ public class ExcelMergeTool {
         public double getRowsPerSecond() {
             if (timeMillis <= 0) return 0;
             return (double) totalRows / (timeMillis / 1000.0);
+        }
+    }
+
+    /**
+     * 合并Excel文件（流式处理版本）
+     *
+     * @param config 合并配置
+     * @param <T> 数据模型类型
+     * @return 合并结果
+     */
+    public static <T> MergeResult<T> mergeExcelStreaming(MergeConfig<T> config) {
+        long startTime = System.currentTimeMillis();
+        String mergeId = UUID.randomUUID().toString().substring(0, 8);
+        log.info("[{}] 开始流式合并Excel文件，文件数量: {}", mergeId, config.getSourceFiles().size());
+        
+        // 验证配置
+        List<String> validationErrors = validateConfig(config);
+        if (!validationErrors.isEmpty()) {
+            log.error("[{}] 配置验证失败: {}", mergeId, validationErrors);
+            return MergeResult.<T>builder()
+                    .success(false)
+                    .errorMessage("配置验证失败: " + String.join(", ", validationErrors))
+                    .build();
+        }
+        
+        // 创建临时目录
+        Path tempDir = null;
+        try {
+            tempDir = Files.createTempDirectory("excel_merge_" + mergeId);
+            
+            // 创建输出目录
+            Path outputPath = Paths.get(config.getTargetFile());
+            Files.createDirectories(outputPath.getParent());
+            
+            // 报告进度：开始阶段
+            reportProgress(config.getProgressCallback(), 0, 100, "初始化");
+            
+            // 使用流式处理读取数据
+            List<T> processedData = readExcelFilesStreaming(config, mergeId);
+            
+            // 报告进度：读取完成
+            reportProgress(config.getProgressCallback(), 30, 100, "读取完成");
+            
+            // 应用过滤和去重
+            processedData = processDataStreaming(processedData, config, mergeId);
+            
+            // 报告进度：处理完成
+            reportProgress(config.getProgressCallback(), 60, 100, "处理完成");
+            
+            // 写入合并结果
+            writeToExcelStreaming(processedData, config, mergeId);
+            
+            // 报告进度：写入完成
+            reportProgress(config.getProgressCallback(), 100, 100, "写入完成");
+            
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("[{}] 合并完成，总行数: {}，耗时: {}ms", mergeId, processedData.size(), duration);
+            
+            return MergeResult.<T>builder()
+                    .success(true)
+                    .data(processedData)
+                    .totalRows(processedData.size())
+                    .timeMillis(duration)
+                    .outputFile(config.getTargetFile())
+                    .build();
+            
+        } catch (Exception e) {
+            log.error("[{}] 合并过程中发生错误", mergeId, e);
+            return MergeResult.<T>builder()
+                    .success(false)
+                    .errorMessage("合并失败: " + e.getMessage())
+                    .build();
+        } finally {
+            // 清理临时文件
+            cleanupTempDir(tempDir);
+        }
+    }
+
+    /**
+     * 流式读取Excel文件
+     */
+    private static <T> List<T> readExcelFilesStreaming(MergeConfig<T> config, String mergeId) throws Exception {
+        List<String> files = config.getSourceFiles();
+        ExecutorService executor = config.getExecutor();
+        if (executor == null) {
+            executor = createOptimizedThreadPool();
+        }
+        
+        try {
+            List<Future<List<T>>> futures = new ArrayList<>();
+            
+            // 提交读取任务
+            for (String file : files) {
+                futures.add(executor.submit(() -> readExcelFileStreaming(file, config, mergeId)));
+            }
+            
+            // 收集结果
+            List<T> result = new ArrayList<>();
+            for (int i = 0; i < futures.size(); i++) {
+                result.addAll(futures.get(i).get());
+                // 报告读取进度
+                reportProgress(config.getProgressCallback(), i + 1, futures.size(), "读取文件");
+            }
+            
+            log.info("[{}] 成功读取 {} 个文件，总数据行数: {}", mergeId, files.size(), result.size());
+            return result;
+            
+        } finally {
+            if (config.getExecutor() == null) {
+                executor.shutdown();
+                try {
+                    if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                        executor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    executor.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
+
+    /**
+     * 流式读取单个Excel文件
+     */
+    private static <T> List<T> readExcelFileStreaming(String filePath, MergeConfig<T> config, String mergeId) {
+        log.info("[{}] 开始读取文件: {}", mergeId, filePath);
+        List<T> data = new ArrayList<>();
+        
+        EasyExcel.read(filePath, config.getModelClass(), new AnalysisEventListener<T>() {
+            @Override
+            public void invoke(T t, AnalysisContext analysisContext) {
+                data.add(t);
+                // 监控内存使用
+                monitorMemoryUsage("读取文件");
+            }
+            
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext analysisContext) {
+                log.info("[{}] 文件读取完成: {}，行数: {}", mergeId, filePath, data.size());
+            }
+        }).sheet().doRead();
+        
+        return data;
+    }
+
+    /**
+     * 流式处理数据（应用过滤和去重）
+     */
+    private static <T> List<T> processDataStreaming(List<T> data, MergeConfig<T> config, String mergeId) {
+        int originalSize = data.size();
+        List<T> result = data;
+        
+        // 应用过滤器
+        if (config.getFilter() != null) {
+            result = data.parallelStream()
+                    .filter(config.getFilter())
+                    .collect(Collectors.toList());
+            log.info("[{}] 应用过滤器后，数据行数: {} -> {}", mergeId, originalSize, result.size());
+            
+            // 报告过滤进度
+            reportProgress(config.getProgressCallback(), 40, 100, "过滤完成");
+        }
+        
+        // 应用去重
+        if (config.isEnableDeduplication() && config.getKeyExtractor() != null) {
+            int beforeDedup = result.size();
+            result = deduplicateDataParallel(result, config);
+            log.info("[{}] 应用去重后，数据行数: {} -> {}", mergeId, beforeDedup, result.size());
+            
+            // 报告去重进度
+            reportProgress(config.getProgressCallback(), 50, 100, "去重完成");
+        }
+        
+        return result;
+    }
+
+    /**
+     * 并行去重
+     */
+    private static <T> List<T> deduplicateDataParallel(List<T> data, MergeConfig<T> config) {
+        return data.parallelStream()
+                .collect(Collectors.groupingBy(
+                    config.getKeyExtractor(),
+                    Collectors.reducing(null, (a, b) -> 
+                        config.getMergeFunction() != null ? 
+                            config.getMergeFunction().apply(a, b) : a)
+                ))
+                .values()
+                .stream()
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 流式写入Excel文件
+     */
+    private static <T> void writeToExcelStreaming(List<T> data, MergeConfig<T> config, String mergeId) throws Exception {
+        log.info("[{}] 开始写入合并文件: {}, 数据行数: {}", mergeId, config.getTargetFile(), data.size());
+        
+        // 计算最优批处理大小
+        int batchSize = calculateOptimalBatchSize(data.size());
+        
+        try (FileOutputStream fos = new FileOutputStream(config.getTargetFile());
+             ExcelWriter excelWriter = EasyExcel.write(fos, config.getModelClass())
+                     .useDefaultStyle(false)  // 禁用默认样式
+                     .build()) {
+            
+            WriteSheet writeSheet = EasyExcel.writerSheet("Sheet1").build();
+            
+            // 使用 CompletableFuture 异步写入
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                // 分批写入
+                for (int i = 0; i < data.size(); i += batchSize) {
+                    int endIndex = Math.min(i + batchSize, data.size());
+                    List<T> batch = data.subList(i, endIndex);
+                    excelWriter.write(batch, writeSheet);
+                    
+                    // 报告写入进度
+                    int progress = 60 + (int) (((double) endIndex / data.size()) * 40);
+                    reportProgress(config.getProgressCallback(), progress, 100, "写入数据");
+                    
+                    // 监控内存使用
+                    monitorMemoryUsage("写入数据");
+                }
+            }, config.getExecutor());
+            
+            // 等待写入完成，设置超时
+            future.get(30, TimeUnit.MINUTES);
+        }
+        
+        log.info("[{}] 文件写入完成: {}", mergeId, config.getTargetFile());
+    }
+
+    /**
+     * 创建优化的线程池
+     */
+    private static ExecutorService createOptimizedThreadPool() {
+        int processors = Runtime.getRuntime().availableProcessors();
+        return new ThreadPoolExecutor(
+            processors,                    // 核心线程数
+            processors * 2,               // 最大线程数
+            60L,                          // 空闲线程存活时间
+            TimeUnit.SECONDS,             // 时间单位
+            new LinkedBlockingQueue<>(1000),  // 工作队列
+            new ThreadFactory() {
+                private final AtomicInteger threadNumber = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "excel-merge-thread-" + threadNumber.getAndIncrement());
+                    t.setDaemon(true);  // 设置为守护线程
+                    return t;
+                }
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()  // 拒绝策略
+        );
+    }
+
+    /**
+     * 计算最优批处理大小
+     */
+    private static int calculateOptimalBatchSize(long totalRows) {
+        if (totalRows < 10000) {
+            return 1000;
+        } else if (totalRows < 100000) {
+            return 5000;
+        } else if (totalRows < 1000000) {
+            return 10000;
+        } else {
+            return 20000;
+        }
+    }
+
+    /**
+     * 监控内存使用
+     */
+    private static void monitorMemoryUsage(String phase) {
+        Runtime runtime = Runtime.getRuntime();
+        long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+        long maxMemory = runtime.maxMemory();
+        double memoryUsage = (double) usedMemory / maxMemory * 100;
+        
+        if (memoryUsage > 80) {  // 内存使用超过80%
+            System.gc();  // 触发垃圾回收
+            log.warn("内存使用率过高: {}%, 当前阶段: {}", memoryUsage, phase);
         }
     }
 }

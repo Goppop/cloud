@@ -8,7 +8,6 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -49,8 +48,8 @@ public class ExcelMergeExample {
                 .modelClass(ProductData.class)
                 .build();
         
-        // 执行合并
-        ExcelMergeTool.MergeResult<ProductData> result = ExcelMergeTool.mergeExcel(config);
+        // 执行合并（使用流式处理版本）
+        ExcelMergeTool.MergeResult<ProductData> result = ExcelMergeTool.mergeExcelStreaming(config);
         
         // 输出结果
         if (result.isSuccess()) {
@@ -89,8 +88,8 @@ public class ExcelMergeExample {
                 })
                 .build();
         
-        // 执行合并
-        ExcelMergeTool.MergeResult<OrderData> result = ExcelMergeTool.mergeExcel(config);
+        // 执行合并（使用流式处理版本）
+        ExcelMergeTool.MergeResult<OrderData> result = ExcelMergeTool.mergeExcelStreaming(config);
         
         // 输出结果
         if (result.isSuccess()) {
@@ -122,8 +121,8 @@ public class ExcelMergeExample {
                         product.getPrice().compareTo(BigDecimal.ZERO) > 0)
                 .build();
         
-        // 执行合并
-        ExcelMergeTool.MergeResult<ProductData> result = ExcelMergeTool.mergeExcel(config);
+        // 执行合并（使用流式处理版本）
+        ExcelMergeTool.MergeResult<ProductData> result = ExcelMergeTool.mergeExcelStreaming(config);
         
         // 输出结果
         if (result.isSuccess()) {
@@ -167,8 +166,8 @@ public class ExcelMergeExample {
                 .mergeFunction((a, b) -> a.getValue() > b.getValue() ? a : b) // 保留值较大的记录
                 .build();
         
-        // 执行合并
-        ExcelMergeTool.MergeResult<LargeVolumeData> result = ExcelMergeTool.mergeExcel(config);
+        // 执行合并（使用流式处理版本）
+        ExcelMergeTool.MergeResult<LargeVolumeData> result = ExcelMergeTool.mergeExcelStreaming(config);
         
         // 关闭线程池
         executor.shutdown();

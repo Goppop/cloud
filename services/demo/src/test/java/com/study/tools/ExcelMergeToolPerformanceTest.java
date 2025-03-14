@@ -24,6 +24,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+
 
 /**
  * Excel合并工具性能测试
@@ -88,25 +92,23 @@ public class ExcelMergeToolPerformanceTest {
         System.out.println("中等数据量文件生成完成: " + mediumFile1 + ", " + mediumFile2);
         
         // 生成大数据量文件，分批写入
-       EasyExcel.write(largeFile, TestData.class)
-           .sheet("Sheet1")
-           .doWrite(() -> {
-               List<TestData> dataList = new ArrayList<>();
-               int batchSize = 10000;
-               int totalBatches = LARGE_DATASET_SIZE / batchSize;
+        try (ExcelWriter excelWriter = EasyExcel.write(largeFile, TestData.class)
+                .useDefaultStyle(false)  // 禁用默认样式，提高性能
+                .build()) {
+            WriteSheet writeSheet = EasyExcel.writerSheet("Sheet1").build();
+            int batchSize = 50000;  // 增加批处理大小
+            int totalBatches = LARGE_DATASET_SIZE / batchSize;
 
-               for (int i = 0; i < totalBatches; i++) {
-                   dataList.clear();
-                   String prefix = "large_batch" + i + "_";
-                   dataList.addAll(generateTestData(batchSize, prefix));
-
-                   System.out.println("生成大数据量文件进度: " + (i + 1) + "/" + totalBatches);
-                   return dataList;
-               }
-               return null;
-           });
-       System.out.println("大数据量文件生成完成: " + largeFile);
-
+            for (int i = 0; i < totalBatches; i++) {
+                String prefix = "large_batch" + i + "_";
+                List<TestData> dataList = generateTestData(batchSize, prefix);
+                excelWriter.write(dataList, writeSheet);
+                if ((i + 1) % 2 == 0) {  // 减少进度输出频率
+                    System.out.println("生成大数据量文件进度: " + (i + 1) + "/" + totalBatches);
+                }
+            }
+        }
+        System.out.println("大数据量文件生成完成: " + largeFile);
     }
     
     /**
@@ -114,19 +116,40 @@ public class ExcelMergeToolPerformanceTest {
      */
     private List<TestData> generateTestData(int count, String prefix) {
         List<TestData> dataList = new ArrayList<>(count);
+        // 预创建一些常用对象，避免重复创建
+        String[] categories = {"Category 0", "Category 1", "Category 2", "Category 3", "Category 4"};
+        String[] tags = {"tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8", "tag9", "tag0"};
+        Date now = new Date();
+        
+        // 使用StringBuilder来构建字符串
+        StringBuilder sb = new StringBuilder(100);
         
         for (int i = 0; i < count; i++) {
             TestData data = new TestData();
-            data.setId(prefix + i);
-            data.setName("Name " + i);
-            data.setValue(new BigDecimal(String.format("%.2f", Math.random() * 10000)));
+            // 使用StringBuilder优化字符串拼接
+            sb.setLength(0);
+            sb.append(prefix).append(i);
+            data.setId(sb.toString());
+            
+            sb.setLength(0);
+            sb.append("Name ").append(i);
+            data.setName(sb.toString());
+            
+            data.setValue(new BigDecimal(Math.random() * 10000).setScale(2, BigDecimal.ROUND_HALF_UP));
             data.setCount(i % 100);
-            data.setCategory("Category " + (i % 5));
+            data.setCategory(categories[i % 5]);
             data.setActive(i % 10 != 0);
-            data.setCreatedAt(new Date());
-            data.setCode("CODE" + String.format("%06d", i));
-            data.setDescription("This is a description for item " + i + " with some additional text to make it longer.");
-            data.setTags("tag1,tag2,tag" + (i % 10));
+            data.setCreatedAt(now);  // 使用同一个Date对象
+            
+            sb.setLength(0);
+            sb.append("CODE").append(String.format("%06d", i));
+            data.setCode(sb.toString());
+            
+            sb.setLength(0);
+            sb.append("This is a description for item ").append(i).append(" with some additional text to make it longer.");
+            data.setDescription(sb.toString());
+            
+            data.setTags(tags[i % 10] + "," + tags[(i + 1) % 10] + "," + tags[(i + 2) % 10]);
             
             dataList.add(data);
         }
@@ -342,6 +365,225 @@ public class ExcelMergeToolPerformanceTest {
         System.out.println("已完成任务数: " + executor.getCompletedTaskCount());
         System.out.println("--------------------------");
     }
+    
+    /**
+     * 测试小数据量流式合并性能
+     */
+    @Test
+    void testSmallDatasetStreamingPerformance() {
+        System.out.println("\n===== 小数据量流式合并性能测试 =====");
+        
+        // 设置合并配置
+        String outputFile = outputDir.resolve("small_merged_streaming.xlsx").toString();
+        ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+                .sourceFiles(Arrays.asList(smallFile1, smallFile2))
+                .targetFile(outputFile)
+                .modelClass(TestData.class)
+                .build();
+        
+        // 执行流式合并并记录时间
+        long startTime = System.currentTimeMillis();
+        ExcelMergeTool.MergeResult<TestData> result = ExcelMergeTool.mergeExcelStreaming(config);
+        long endTime = System.currentTimeMillis();
+        
+        // 输出性能统计
+        printPerformanceStats("小数据量流式", result, startTime, endTime);
+    }
+
+    /**
+     * 测试中等数据量流式合并性能
+     */
+    @Test
+    void testMediumDatasetStreamingPerformance() {
+        System.out.println("\n===== 中等数据量流式合并性能测试 =====");
+        
+        // 设置合并配置
+        String outputFile = outputDir.resolve("medium_merged_streaming.xlsx").toString();
+        ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+                .sourceFiles(Arrays.asList(mediumFile1, mediumFile2))
+                .targetFile(outputFile)
+                .modelClass(TestData.class)
+                .batchSize(5000) // 使用更大的批处理大小
+                .build();
+        
+        // 执行流式合并并记录时间
+        long startTime = System.currentTimeMillis();
+        ExcelMergeTool.MergeResult<TestData> result = ExcelMergeTool.mergeExcelStreaming(config);
+        long endTime = System.currentTimeMillis();
+        
+        // 输出性能统计
+        printPerformanceStats("中等数据量流式", result, startTime, endTime);
+    }
+
+    /**
+     * 测试中等数据量流式合并性能 - 带去重
+     */
+    @Test
+    void testMediumDatasetStreamingWithDeduplicationPerformance() {
+        System.out.println("\n===== 中等数据量流式去重合并性能测试 =====");
+        
+        // 设置合并配置
+        String outputFile = outputDir.resolve("medium_merged_streaming_dedup.xlsx").toString();
+        ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+                .sourceFiles(Arrays.asList(mediumFile1, mediumFile2))
+                .targetFile(outputFile)
+                .modelClass(TestData.class)
+                .enableDeduplication(true)
+                .keyExtractor(TestData::getId)
+                .batchSize(5000)
+                .build();
+        
+        // 执行流式合并并记录时间
+        long startTime = System.currentTimeMillis();
+        ExcelMergeTool.MergeResult<TestData> result = ExcelMergeTool.mergeExcelStreaming(config);
+        long endTime = System.currentTimeMillis();
+        
+        // 输出性能统计
+        printPerformanceStats("中等数据量流式去重", result, startTime, endTime);
+    }
+
+    /**
+     * 测试大数据量流式合并性能
+     * 注意：此测试生成和处理大量数据，运行时间较长
+     */
+    @Test
+    void testLargeDatasetStreamingPerformance() {
+        System.out.println("\n===== 大数据量流式合并性能测试 =====");
+        
+        // 创建优化的线程池
+        ExecutorService executor = new ThreadPoolExecutor(
+            Runtime.getRuntime().availableProcessors(),  // 核心线程数
+            Runtime.getRuntime().availableProcessors() * 2,  // 最大线程数
+            60L,  // 空闲线程存活时间
+            TimeUnit.SECONDS,  // 时间单位
+            new LinkedBlockingQueue<>(1000),  // 工作队列
+            new ThreadFactory() {
+                private final AtomicInteger threadNumber = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "excel-merge-thread-" + threadNumber.getAndIncrement());
+                    t.setDaemon(true);  // 设置为守护线程
+                    return t;
+                }
+            },
+            new ThreadPoolExecutor.CallerRunsPolicy()  // 拒绝策略
+        );
+        
+        try {
+            // 设置合并配置，调整批处理大小
+            String outputFile = outputDir.resolve("large_merged_streaming.xlsx").toString();
+            ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+                    .sourceFiles(Arrays.asList(largeFile))
+                    .targetFile(outputFile)
+                    .modelClass(TestData.class)
+                    .batchSize(10000) // 更大的批处理大小
+                    .executor(executor)  // 设置执行器
+                    .build();
+            
+            // 执行流式合并并记录时间
+            long startTime = System.currentTimeMillis();
+            ExcelMergeTool.MergeResult<TestData> result = ExcelMergeTool.mergeExcelStreaming(config);
+            long endTime = System.currentTimeMillis();
+            
+            // 输出性能统计
+            printPerformanceStats("大数据量流式", result, startTime, endTime);
+            
+            // 输出线程池统计
+            printThreadPoolStats((ThreadPoolExecutor) executor);
+            
+        } finally {
+            // 关闭线程池
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                executor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+//    /**
+//     * 测试流式处理与普通处理的性能对比
+//     */
+//    @Test
+//    void testStreamingVsNormalPerformance() {
+//        System.out.println("\n===== 流式处理与普通处理性能对比测试 =====");
+//
+//        // 准备测试配置
+//        String normalOutputFile = outputDir.resolve("medium_merged_normal.xlsx").toString();
+//        String streamingOutputFile = outputDir.resolve("medium_merged_streaming.xlsx").toString();
+//
+//        ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+//                .sourceFiles(Arrays.asList(mediumFile1, mediumFile2))
+//                .modelClass(TestData.class)
+//                .batchSize(5000)
+//                .enableDeduplication(true)
+//                .keyExtractor(TestData::getId)
+//                .build();
+//
+//        // 测试普通处理
+//        config.setTargetFile(normalOutputFile);
+//        long normalStartTime = System.currentTimeMillis();
+//        ExcelMergeTool.MergeResult<TestData> normalResult = ExcelMergeTool.mergeExcel(config);
+//        long normalEndTime = System.currentTimeMillis();
+//
+//        // 测试流式处理
+//        config.setTargetFile(streamingOutputFile);
+//        long streamingStartTime = System.currentTimeMillis();
+//        ExcelMergeTool.MergeResult<TestData> streamingResult = ExcelMergeTool.mergeExcelStreaming(config);
+//        long streamingEndTime = System.currentTimeMillis();
+//
+//        // 输出性能对比
+//        System.out.println("--------------------------");
+//        System.out.println("性能对比测试结果:");
+//        System.out.println("普通处理:");
+//        System.out.println("  总时间: " + (normalEndTime - normalStartTime) + " ms");
+//        System.out.println("  处理速度: " + String.format("%.2f", normalResult.getRowsPerSecond()) + " 行/秒");
+//        System.out.println("流式处理:");
+//        System.out.println("  总时间: " + (streamingEndTime - streamingStartTime) + " ms");
+//        System.out.println("  处理速度: " + String.format("%.2f", streamingResult.getRowsPerSecond()) + " 行/秒");
+//        System.out.println("--------------------------");
+//    }
+
+    /**
+     * 测试流式处理的内存使用情况
+     */
+    @Test
+    void testStreamingMemoryUsage() {
+        System.out.println("\n===== 流式处理内存使用测试 =====");
+        
+        // 设置合并配置
+        String outputFile = outputDir.resolve("medium_merged_streaming_memory.xlsx").toString();
+        ExcelMergeTool.MergeConfig<TestData> config = ExcelMergeTool.MergeConfig.<TestData>builder()
+                .sourceFiles(Arrays.asList(mediumFile1, mediumFile2))
+                .targetFile(outputFile)
+                .modelClass(TestData.class)
+                .batchSize(5000)
+                .enableDeduplication(true)
+                .keyExtractor(TestData::getId)
+                .progressCallback((current, total, phase) -> {
+                    Runtime runtime = Runtime.getRuntime();
+                    long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+                    long maxMemory = runtime.maxMemory();
+                    double memoryUsage = (double) usedMemory / maxMemory * 100;
+                    System.out.println(String.format("阶段: %s, 进度: %d/%d, 内存使用: %.2f%%", 
+                            phase, current, total, memoryUsage));
+                })
+                .build();
+        
+        // 执行流式合并
+        long startTime = System.currentTimeMillis();
+        ExcelMergeTool.MergeResult<TestData> result = ExcelMergeTool.mergeExcelStreaming(config);
+        long endTime = System.currentTimeMillis();
+        
+        // 输出性能统计
+        printPerformanceStats("流式处理内存测试", result, startTime, endTime);
+    }
+    
+
     
     /**
      * 测试数据模型
